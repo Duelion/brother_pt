@@ -8,6 +8,14 @@ Usage:
     2. Run: uv run python playground_qr.py
     3. Check the printed label and preview image
     4. Repeat until you find your ideal settings
+
+Simple Usage (assumes 18mm tape or uses detected tape width):
+    with BrotherPTBluetooth(PORT) as printer:
+        printer.print_qr(url)
+    
+    # Or with custom config:
+    with BrotherPTBluetooth(PORT) as printer:
+        printer.print_qr(url, CONFIG)
 """
 
 from brother_pt import BrotherPTBluetooth
@@ -127,7 +135,8 @@ def main():
         # Print
         if PRINT_ENABLED:
             print(f"\n--- Printing ---")
-            print_qr(printer, URL, CONFIG)
+            # Simple way to print QR codes using the CONFIG
+            printer.print_qr(URL, CONFIG)
             print("Done! Check your printer.")
         else:
             print(f"\n--- Printing DISABLED ---")

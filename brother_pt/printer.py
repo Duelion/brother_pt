@@ -33,6 +33,7 @@ from .protocol import (
     cmd_print,
     generate_raster_commands,
 )
+from .qrcode import print_qr as _print_qr, QRConfig
 
 
 class BrotherPTBluetooth:
@@ -297,3 +298,21 @@ class BrotherPTBluetooth:
             time.sleep(0.1)
 
         raise RuntimeError("Print timeout")
+
+    def print_qr(
+        self,
+        data: str,
+        config: Optional[QRConfig] = None,
+    ):
+        """
+        Print a QR code stamp.
+        
+        Args:
+            data: URL or text to encode in the QR code.
+            config: QR configuration. Uses DEFAULT_CONFIG if None.
+        
+        Example:
+            >>> with BrotherPTBluetooth("COM4") as printer:
+            ...     printer.print_qr("https://example.com")
+        """
+        _print_qr(self, data, config)

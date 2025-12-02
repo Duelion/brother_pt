@@ -1,16 +1,39 @@
 """
-   Copyright 2022 Thomas Reidemeister
+Brother P-Touch Bluetooth
+=========================
+Python library for printing to Brother P-Touch label printers via Bluetooth.
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+Tested with PT-P710BT on Windows 11.
 
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+Example:
+    >>> from brother_pt import BrotherPTBluetooth
+    >>> from PIL import Image
+    >>> 
+    >>> with BrotherPTBluetooth("COM4") as printer:
+    ...     print(f"Tape: {printer.media_width}mm")
+    ...     printer.print_image(Image.open("label.png"))
 """
-VERSION = '1.0'
+
+__version__ = "2.0.0"
+
+from .printer import BrotherPTBluetooth
+from .protocol import (
+    PrinterStatus,
+    StatusType,
+    MediaType,
+    TapeColor,
+    TextColor,
+    get_print_width,
+    TAPE_MARGINS,
+)
+
+__all__ = [
+    "BrotherPTBluetooth",
+    "PrinterStatus",
+    "StatusType",
+    "MediaType",
+    "TapeColor",
+    "TextColor",
+    "get_print_width",
+    "TAPE_MARGINS",
+]

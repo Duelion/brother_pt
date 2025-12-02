@@ -1,175 +1,296 @@
 """
-   Copyright 2022 Thomas Reidemeister
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+Brother P-Touch Bluetooth Printer
+=================================
+Main printer class for Bluetooth communication with PT-P710BT and similar.
 """
-import sys
 
-import usb.core
-import usb.util
-import warnings
+import time
+from typing import Optional
 
-from .cmd import *
-from .raster import *
+import serial
+import serial.tools.list_ports
+from PIL import Image
+
+from .protocol import (
+    PRINT_HEAD_PINS,
+    STATUS_SIZE,
+    MIN_TAPE_DOTS,
+    TAPE_MARGINS,
+    get_print_width,
+    PrinterStatus,
+    StatusType,
+    parse_status,
+    cmd_invalidate,
+    cmd_initialize,
+    cmd_status_request,
+    cmd_raster_mode,
+    cmd_enable_notifications,
+    cmd_print_info,
+    cmd_set_mode,
+    cmd_set_advanced_mode,
+    cmd_set_margin,
+    cmd_set_compression_tiff,
+    cmd_print,
+    generate_raster_commands,
+)
 
 
-def find_printers(serial=None):
-    found_printers = []
-    for product_id in SupportedPrinterIDs:
-        dev = usb.core.find(idVendor=USBID_BROTHER, idProduct=product_id)
-        if dev is not None:
-            if serial is not None:
-                if serial == dev.serial_number:
-                    found_printers.append(dev)
-                else:
+class BrotherPTBluetooth:
+    """
+    Brother P-Touch Bluetooth printer interface.
+    
+    Connects via Bluetooth Serial Port Profile (SPP) which appears
+    as a COM port on Windows.
+    
+    Example:
+        >>> printer = BrotherPTBluetooth("COM4")
+        >>> print(f"Tape: {printer.media_width}mm")
+        >>> printer.print_image(Image.open("label.png"))
+    """
+
+    def __init__(
+        self,
+        port: Optional[str] = None,
+        baudrate: int = 9600,
+        timeout: float = 3.0,
+    ):
+        """
+        Initialize Bluetooth printer connection.
+        
+        Args:
+            port: COM port (e.g., "COM4"). Auto-detects if None.
+            baudrate: Serial baud rate (default 9600).
+            timeout: Read/write timeout in seconds.
+        """
+        self._port = port or self._find_bluetooth_port()
+        self._baudrate = baudrate
+        self._timeout = timeout
+        self._serial: Optional[serial.Serial] = None
+        self._status: Optional[PrinterStatus] = None
+
+        self._connect()
+
+    def _find_bluetooth_port(self) -> str:
+        """Auto-detect Bluetooth serial port."""
+        ports = serial.tools.list_ports.comports()
+        
+        for port_info in ports:
+            if "bluetooth" in port_info.description.lower():
+                # Test if port is writable
+                try:
+                    test_ser = serial.Serial(
+                        port_info.device,
+                        self._baudrate if hasattr(self, '_baudrate') else 9600,
+                        timeout=0.5,
+                        write_timeout=1.0,
+                    )
+                    test_ser.write(b"\x00")
+                    test_ser.close()
+                    return port_info.device
+                except:
                     continue
-            else:
-                found_printers.append(dev)
 
-    return found_printers
+        raise RuntimeError("No Bluetooth serial port found. Pair the printer first.")
 
+    def _connect(self):
+        """Establish serial connection and read printer status."""
+        self._serial = serial.Serial(
+            self._port,
+            self._baudrate,
+            timeout=self._timeout,
+            write_timeout=self._timeout,
+        )
+        self._refresh_status()
 
-class BrotherPt:
-    def __init__(self, serial: str = None):
-        printers = find_printers(serial)
-        if len(printers) == 0:
-            raise RuntimeError("No supported driver found")
+    def _write(self, data: bytes) -> int:
+        """Write data to printer."""
+        if not self._serial or not self._serial.is_open:
+            raise RuntimeError("Not connected")
+        return self._serial.write(data)
 
-        self._media_width = None
-        self._media_type = None
-        self._tape_color = None
-        self._text_color = None
+    def _read(self, length: int = STATUS_SIZE) -> bytes:
+        """Read data from printer."""
+        if not self._serial or not self._serial.is_open:
+            raise RuntimeError("Not connected")
+        return self._serial.read(length)
 
-        self._dev = printers[0]
-        self.__initialize()
+    def _refresh_status(self):
+        """Query printer for current status."""
+        self._write(cmd_invalidate())
+        time.sleep(0.1)
+        self._write(cmd_initialize())
+        time.sleep(0.1)
+        self._write(cmd_status_request())
+        time.sleep(0.3)
 
-    def __initialize(self):
-        # libusb initialization, and bypass kernel drivers
-        if self._dev.is_kernel_driver_active(0):
-            self._dev.detach_kernel_driver(0)
+        data = self._read(STATUS_SIZE)
+        self._status = parse_status(data)
 
-        self._dev.set_configuration()
-        self.update_status()
-
-    def __del__(self):
-        usb.util.dispose_resources(self._dev)
-
-    def __write(self, data: bytes) -> int:
-        length = 0
-        while length < len(data):
-            # chunk into packet size
-            length += self._dev.write(USB_OUT_EP_ID, data[length:(length+0x40)], USB_TRX_TIMEOUT_MS)
-            if length == 0:
-                raise RuntimeError("IO timeout while writing to printer")
-        return length
-
-    def __read(self, length: int = 0x80) -> bytes:
-        try:
-            data = self._dev.read(USB_IN_EP_ID, length, USB_TRX_TIMEOUT_MS)
-        except usb.core.USBError as e:
-            raise RuntimeError("IO timeout while reading from printer")
-        return data
-
-    def update_status(self):
-        self.__write(invalidate())
-        self.__write(initialize())
-        status_information = b''
-        while len(status_information) == 0:
-            self.__write(status_information_request())
-            status_information = self.__read(STATUS_MESSAGE_LENGTH)
-
-        self._media_width = status_information[StatusOffsets.MEDIA_WIDTH]
-        self._media_type = MediaType(status_information[StatusOffsets.MEDIA_TYPE])
-        self._tape_color = TapeColor(status_information[StatusOffsets.TAPE_COLOR_INFORMATION])
-        self._text_color = TextColor(status_information[StatusOffsets.TEXT_COLOR_INFORMATION])
+        if self._status is None:
+            raise RuntimeError("Failed to read printer status")
 
     @property
     def media_width(self) -> int:
-        return self._media_width
+        """Current tape width in mm."""
+        return self._status.media_width if self._status else 0
 
     @property
-    def media_type(self) -> MediaType:
-        return self._media_type
+    def status(self) -> Optional[PrinterStatus]:
+        """Current printer status."""
+        return self._status
 
     @property
-    def tape_color(self) -> TapeColor:
-        return self._tape_color
+    def print_width(self) -> int:
+        """Printable pixel width for current tape."""
+        return get_print_width(self.media_width)
 
-    @property
-    def text_color(self) -> TextColor:
-        return self._text_color
+    def close(self):
+        """Close the serial connection."""
+        if self._serial and self._serial.is_open:
+            self._serial.close()
 
-    def print_data(self, data:bytes, margin_px:int):
-        self.__write(enter_dynamic_command_mode())
-        self.__write(enable_status_notification())
-        self.__write(print_information(data, self.media_width))
-        self.__write(set_mode())
-        self.__write(set_advanced_mode())
-        self.__write(margin_amount(margin_px))
-        self.__write(set_compression_mode())
-        for cmd in gen_raster_commands(data):
-            self.__write(cmd)
-        self.__write(print_with_feeding())
-        while True:
-            res = self.__read()
-            if len(res) > 0:
-                if res[StatusOffsets.STATUS_TYPE] == StatusType.PRINTING_COMPLETED:
-                    # absorb phase change message
-                    self.__read()
-                    break
-                elif res[StatusOffsets.STATUS_TYPE] == StatusType.ERROR_OCCURRED:
-                    error_message = ''
-                    if res[8]: # Error 1
-                        if res[8] & 0x01:
-                            error_message += 'no media|'
-                        if res[8] & 0x04:
-                            error_message += 'cutter jam|'
-                        if res[8] & 0x08:
-                            error_message += 'low batteries|'
-                        if res[8] & 0x40:
-                            error_message += 'high-voltage adapter|'
-                        pass
-                    if res[9]: # Error 2
-                        if res[9] & 0x01:
-                            error_message += 'wrong media (check size)|'
-                        if res[9] & 0x10:
-                            error_message += 'cover open|'
-                        if res[9] & 0x20:
-                            error_message += 'overheating|'
-                    if len(error_message) > 0:
-                        error_message = error_message[:-1]
-                    raise RuntimeError(error_message)
+    def __enter__(self):
+        return self
 
-    def print_image(self, image: Image, margin_px: int = 0):
-        self.update_status()
-        image = prepare_image(image, self.media_width)
-        if (image.width + margin_px) < MINIMUM_TAPE_POINTS:
-            warnings.warn("Image (%i) + cut margin (%i) is smaller than minimum tape width (%i) ... "
-                          "cutting length will be extended" % (image.width, margin_px, MINIMUM_TAPE_POINTS))
-        data = raster_image(image, self.media_width)
-        self.print_data(data, margin_px)
+    def __exit__(self, *args):
+        self.close()
 
+    def print_image(
+        self,
+        image: Image.Image,
+        autocut: bool = True,
+        margin: int = 0,
+    ):
+        """
+        Print an image to the label printer.
+        
+        Args:
+            image: PIL Image to print. Height must match tape print width.
+            autocut: Cut tape after printing (default True).
+            margin: Feed margin in dots (default 0).
+        
+        Raises:
+            ValueError: If image dimensions don't match tape.
+            RuntimeError: If print fails.
+        """
+        # Refresh status to get current tape
+        self._refresh_status()
 
-if __name__ == '__main__':
-    printer = BrotherPt()
-    print("Media width: %dmm" % printer.media_width)
-    print("Media type : %s" % printer.media_type.name)
-    print("Tape color : %s" % printer.tape_color.name)
-    print("Text color : %s" % printer.text_color.name)
-    print()
-    if len(sys.argv) != 2:
-        print("%s <imagename>" % sys.argv[0], file=sys.stderr)
-        sys.exit(1)
-    image = Image.open(sys.argv[1])
+        # Prepare image
+        raster_data = self._prepare_image(image)
 
-    printer.print_image(image)
+        # Send print job
+        self._send_print_job(raster_data, autocut, margin)
+
+    def _prepare_image(self, image: Image.Image) -> bytes:
+        """Convert image to raster data."""
+        expected_height = self.print_width
+
+        # Check/rotate image to fit tape
+        if image.height == expected_height:
+            pass  # Good
+        elif image.width == expected_height:
+            image = image.transpose(Image.Transpose.ROTATE_90)
+        else:
+            raise ValueError(
+                f"Image dimensions ({image.width}x{image.height}) don't match "
+                f"tape print width ({expected_height}px for {self.media_width}mm tape)"
+            )
+
+        # Convert to 1-bit
+        image = self._to_raster_channel(image)
+
+        # Create raster buffer
+        margin = TAPE_MARGINS.get(self.media_width, 0)
+        buffer = bytearray()
+
+        for col in range(image.width):
+            # Leading margin
+            buffer.extend(b"\x00" * margin)
+            # Pixel data
+            for row in range(image.height):
+                buffer.append(0xFF if image.getpixel((col, row)) else 0x00)
+            # Trailing margin
+            buffer.extend(b"\x00" * margin)
+
+        # Compress to bits
+        return self._compress_to_bits(buffer)
+
+    def _to_raster_channel(self, image: Image.Image) -> Image.Image:
+        """Convert image to printable 1-bit format."""
+        if image.mode == "1":
+            return image
+        elif image.mode == "L":
+            return image.point(lambda x: 0xFF if x < 0xFF else 0)
+        elif image.mode == "RGB":
+            return image.convert("L").point(lambda x: 0xFF if x < 0xFF else 0)
+        elif image.mode == "RGBA":
+            return image.split()[-1].point(lambda x: 0xFF if x > 0 else 0)
+        elif image.mode == "P":
+            return self._to_raster_channel(image.convert("RGBA"))
+        else:
+            raise ValueError(f"Unsupported image mode: {image.mode}")
+
+    def _compress_to_bits(self, buffer: bytearray) -> bytes:
+        """Compress byte buffer to bits (8 bytes -> 1 byte)."""
+        bits = bytearray()
+        for i in range(0, len(buffer), 8):
+            byte = 0
+            for j in range(8):
+                if buffer[i + j] > 0:
+                    byte |= 1 << (7 - j)
+            bits.append(byte)
+        return bytes(bits)
+
+    def _send_print_job(self, raster_data: bytes, autocut: bool, margin: int):
+        """Send complete print job to printer."""
+        # Initialize
+        self._write(cmd_invalidate())
+        time.sleep(0.1)
+        self._write(cmd_initialize())
+        time.sleep(0.1)
+
+        # Enter raster mode
+        self._write(cmd_raster_mode())
+        time.sleep(0.05)
+        self._write(cmd_enable_notifications())
+        time.sleep(0.05)
+
+        # Print settings
+        self._write(cmd_print_info(len(raster_data), self.media_width))
+        self._write(cmd_set_mode(autocut=autocut))
+        self._write(cmd_set_advanced_mode())
+        self._write(cmd_set_margin(margin))
+        self._write(cmd_set_compression_tiff())
+        time.sleep(0.05)
+
+        # Send raster data
+        commands = generate_raster_commands(raster_data)
+        for i, cmd in enumerate(commands):
+            self._write(cmd)
+            if i % 20 == 0:
+                time.sleep(0.02)  # Prevent buffer overflow
+
+        # Print
+        self._write(cmd_print())
+
+        # Wait for completion
+        self._wait_for_completion()
+
+    def _wait_for_completion(self, timeout: float = 60.0):
+        """Wait for print to complete or error."""
+        start = time.time()
+
+        while time.time() - start < timeout:
+            data = self._read(STATUS_SIZE)
+            if len(data) >= STATUS_SIZE:
+                status = parse_status(data)
+                if status:
+                    if status.is_completed:
+                        self._read(STATUS_SIZE)  # Absorb phase change
+                        return
+                    elif status.is_error:
+                        raise RuntimeError(f"Print error: {', '.join(status.get_errors())}")
+            time.sleep(0.1)
+
+        raise RuntimeError("Print timeout")

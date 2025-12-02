@@ -1,111 +1,154 @@
-## brother_pt
+# Brother P-Touch Bluetooth
 
-Related [blog post](https://reidemeister.com/blog/2022.09.21). This is work in progress...
+Python library for printing to Brother P-Touch label printers via Bluetooth.
 
-A Python package to control Brother PT label printers. This library
-implements the raster control set those printers and allows to 
-configure these printers.
+## Supported Printers
 
-In particular, the following is supported:
- * Raster image files for direct printing on TZe tape, heat-shrink tube is still work in progress
- * You can print image files directly from a Python script 
- * Supported backends
-    * pyusb
-    * Planned: linux kernel [usblp](https://github.com/torvalds/linux/blob/master/drivers/usb/class/usblp.c) backend
-    * Planned: Bluetooth 
-
-The following printers are supported by this package (✓ means verified by the author):
- * PT-P710BT (✓)
- * PT-E550W
- * PT-P750W 
-
-Planned (not officially supported yet)
- * PT-P900
- * PT-P900W
- * PT-P950NW
- * PT-P910BT
- * PT-H500
- * PT-P700
- * PT-E500
- * PT-P300BT
-
-## Background
-
-Although Brother provides support for modern Linux versions for these 
-printers, binary drivers are required. As such the supported platforms
-are limited to desktop machines.
-
-Further, the companion application does not seem to support direct
-raster print (iPrint and Label). In particular the software scales
-imported logos and image files with anti-aliasing when scaled, the
-printer driver then tries to use dithering to approximate these
-smooth edges resulting in poor print qualities of image files printed
-by these tools. 
-By accessing the raster command-set directly, though this module,
-one can achieve higher print quality by exploiting the high resolution
-print modes (180x180dpi so far supported) by these printers.
-
-This package was inspired by [brother_ql](https://github.com/pklaus/brother_ql)
-and [pt-p710bt-label-maker](https://github.com/robby-cornelissen/pt-p710bt-label-maker).
-The former provided the architectural design queues for this module,
-the latter provided a good initial reference for the command set used, though 
-the provided functionality was severely limited.
-
-The full documentation of the raster command set used by the above printers
-can be found [here](http://www.brother.com/product/dev/index.htm).
+- **PT-P710BT** (tested)
+- Other P-Touch printers with Bluetooth SPP should work
 
 ## Installation
 
 ```bash
-pip install --upgrade git+https://github.com/treideme/brother_pt.git
+pip install brother-pt-bluetooth
 ```
 
-## Usage
-
-The main user interface of this package is the command line tool `brother_pt`.
-```
-    Usage: brother_pt [OPTIONS] COMMAND [ARGS]...
-    
-      Command line interface for the brother_pt Python package.
-    
-    Options:
-      -p, --printer <SN>              Serial number of a connected printer
-      --debug
-      --version                       Show the version and exit.
-      --help                          Show this message and exit.
-    
-    Commands:
-      discover  find connected label printers
-      info      list available labels, models etc.
-      print     Print a label
+Or with uv:
+```bash
+uv add brother-pt-bluetooth
 ```
 
-The global options are followed by a command such as `info` or `print`.
-The most important command is the `print` command and here is its CLI signature:
+## Requirements
 
-    Usage: brother_pt print [OPTIONS] IMAGE [IMAGE] ...
+- Windows 10/11 (Bluetooth SPP support)
+- Python 3.10+
+- Printer paired via Windows Bluetooth settings
+
+## Quick Start
+
+```python
+from brother_pt import BrotherPTBluetooth
+from PIL import Image
+
+# Connect to printer (auto-detects COM port)
+printer = BrotherPTBluetooth()
+
+# Or specify port explicitly
+printer = BrotherPTBluetooth("COM4")
+
+# Check tape info
+print(f"Tape: {printer.media_width}mm")
+print(f"Print width: {printer.print_width}px")
+
+# Print an image
+image = Image.open("label.png")
+printer.print_image(image)
+
+# Close connection
+printer.close()
+```
+
+### Context Manager
+
+```python
+from brother_pt import BrotherPTBluetooth
+from PIL import Image
+
+with BrotherPTBluetooth("COM4") as printer:
+    printer.print_image(Image.open("label.png"))
+```
+
+### Creating Labels
+
+Images must have height matching the tape's print width:
+
+| Tape | Print Width |
+|------|-------------|
+| 6mm  | 32px |
+| 9mm  | 50px |
+| 12mm | 70px |
+| 18mm | 112px |
+| 24mm | 128px |
+
+```python
+from brother_pt import BrotherPTBluetooth, get_print_width
+from PIL import Image, ImageDraw
+
+with BrotherPTBluetooth() as printer:
+    # Get required height for current tape
+    height = printer.print_width  # e.g., 112 for 18mm tape
     
-      Print a label of the provided IMAGE.
+    # Create image
+    img = Image.new("RGB", (300, height), "white")
+    draw = ImageDraw.Draw(img)
+    draw.text((10, height // 3), "Hello!", fill="black")
     
-    Options:
-      -r, --rotate [auto|0|90|180|270]
-                                      Rotate the image (counterclock-wise) by this
-                                      amount of degrees.
-      -t, --threshold FLOAT           The threshold value (in percent) to
-                                      discriminate between black and white pixels.
-      --no-cut                        Don't cut the tape after printing the label.
-      --margin                        Print margin 
-      --help                          Show this message and exit.
+    printer.print_image(img)
+```
 
-## Author
+## API Reference
 
- * Thomas Reidemeister
+### BrotherPTBluetooth
 
-## Contributing
+```python
+BrotherPTBluetooth(
+    port: str = None,      # COM port, auto-detect if None
+    baudrate: int = 9600,  # Serial baud rate
+    timeout: float = 3.0,  # Read/write timeout
+)
+```
 
-There are many ways to support the development of brother_pt:
+**Properties:**
+- `media_width` - Tape width in mm (6, 9, 12, 18, 24)
+- `print_width` - Printable pixels for current tape
+- `status` - Current PrinterStatus object
 
-* **File an issue** on Github, if you encounter problems, have a proposal, etc.
-* **Submit a pull request** on Github if you improved the code and know how to use git.
-* **Finance a label printer** from the [author's wishlist](https://www.amazon.ca/hz/wishlist/ls/3R6ALF8DZQ0JY) to 
-allow him to extend the device coverage and testing.
+**Methods:**
+- `print_image(image, autocut=True, margin=0)` - Print a PIL Image
+- `close()` - Close connection
+
+### Helper Functions
+
+```python
+from brother_pt import get_print_width, TAPE_MARGINS
+
+# Get print width for any tape size
+width = get_print_width(18)  # Returns 112
+
+# Margin lookup
+margin = TAPE_MARGINS[18]  # Returns 8
+```
+
+## Finding Your COM Port
+
+After pairing the printer:
+
+1. Open Device Manager
+2. Look under "Ports (COM & LPT)"
+3. Find "Standard Serial over Bluetooth link"
+4. Use that COM port (usually COM3 or COM4)
+
+Or let the library auto-detect:
+
+```python
+printer = BrotherPTBluetooth()  # Auto-finds Bluetooth port
+```
+
+## Troubleshooting
+
+### "No Bluetooth serial port found"
+- Ensure printer is paired in Windows Bluetooth settings
+- Printer should show as "PT-P710BT" with status "Connected"
+
+### "Image dimensions don't match tape"
+- Image height must exactly match `printer.print_width`
+- Use `get_print_width(tape_mm)` to calculate required height
+
+### Print timeout
+- Ensure printer has tape loaded
+- Check for blinking error light on printer
+- Try power cycling the printer
+
+## License
+
+MIT

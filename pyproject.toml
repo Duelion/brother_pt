@@ -18,6 +18,7 @@ dependencies = [
     "pyserial>=3.5",
     "Pillow>=10.0.0",
     "packbits>=0.6",
+    "qrcode>=7.4",
 ]
 
 [build-system]

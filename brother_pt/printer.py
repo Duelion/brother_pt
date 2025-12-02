@@ -160,6 +160,7 @@ class BrotherPTBluetooth:
         image: Image.Image,
         autocut: bool = True,
         margin: int = 0,
+        chain: bool = False,
     ):
         """
         Print an image to the label printer.
@@ -168,6 +169,8 @@ class BrotherPTBluetooth:
             image: PIL Image to print. Height must match tape print width.
             autocut: Cut tape after printing (default True).
             margin: Feed margin in dots (default 0).
+            chain: Chain printing mode. When True, skips the initial
+                   blank tape cut. Useful for continuous printing.
         
         Raises:
             ValueError: If image dimensions don't match tape.
@@ -180,7 +183,7 @@ class BrotherPTBluetooth:
         raster_data = self._prepare_image(image)
 
         # Send print job
-        self._send_print_job(raster_data, autocut, margin)
+        self._send_print_job(raster_data, autocut, margin, chain)
 
     def _prepare_image(self, image: Image.Image) -> bytes:
         """Convert image to raster data."""
@@ -242,7 +245,7 @@ class BrotherPTBluetooth:
             bits.append(byte)
         return bytes(bits)
 
-    def _send_print_job(self, raster_data: bytes, autocut: bool, margin: int):
+    def _send_print_job(self, raster_data: bytes, autocut: bool, margin: int, chain: bool = False):
         """Send complete print job to printer."""
         # Initialize
         self._write(cmd_invalidate())
@@ -259,7 +262,7 @@ class BrotherPTBluetooth:
         # Print settings
         self._write(cmd_print_info(len(raster_data), self.media_width))
         self._write(cmd_set_mode(autocut=autocut))
-        self._write(cmd_set_advanced_mode())
+        self._write(cmd_set_advanced_mode(chain_off=not chain))  # chain=True means don't cut leading tape
         self._write(cmd_set_margin(margin))
         self._write(cmd_set_compression_tiff())
         time.sleep(0.05)

@@ -78,6 +78,13 @@ class QRConfig:
     When True, cuts happen after the batch, not each label.
     """
     
+    skip_initial_feed: bool = True
+    """
+    Skip the initial blank tape cut before printing.
+    When True, no blank strip is cut before printing starts.
+    When False (default printer behavior), cuts any previous tape first.
+    """
+    
     feed_margin: int = 0
     """Extra feed margin in dots (printer minimum ~3mm)."""
     
@@ -373,6 +380,7 @@ def print_qr(
         img,
         autocut=config.autocut,
         margin=config.feed_margin,
+        chain=config.skip_initial_feed,
     )
 
 

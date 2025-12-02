@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 import qrcode
 from qrcode.constants import ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_Q, ERROR_CORRECT_H
 from PIL import Image, ImageDraw
+from loguru import logger
 
 from .protocol import get_print_width, TAPE_MARGINS, MIN_TAPE_DOTS
 
@@ -162,16 +163,23 @@ def generate_qr_image(
         If square_stamp=True, width also matches height.
     """
     config = config or DEFAULT_CONFIG
+    logger.debug(f"Generating QR image: data_len={len(data)}, tape={tape_width_mm}mm, "
+                f"size_ratio={config.size_ratio}, border={config.border_modules}, "
+                f"error_correction={config.error_correction}")
     
     # Calculate dimensions
     print_width = get_print_width(tape_width_mm)
     qr_size = int(print_width * config.size_ratio)
+    logger.debug(f"Calculated dimensions: print_width={print_width}px, qr_size={qr_size}px")
     
     # Ensure QR size is reasonable
     if qr_size < 21:  # Minimum QR is 21x21 modules
-        raise ValueError(f"Tape too narrow for QR code: {tape_width_mm}mm")
+        error_msg = f"Tape too narrow for QR code: {tape_width_mm}mm (qr_size={qr_size}px < 21px minimum)"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
     
     # Generate QR code
+    logger.trace("Creating QR code object...")
     qr = qrcode.QRCode(
         version=config.version,
         error_correction=config.error_correction,
@@ -188,23 +196,28 @@ def generate_qr_image(
     # Get the actual QR dimensions (modules)
     actual_version = qr.version
     modules = actual_version * 4 + 17 + (config.border_modules * 2)
+    logger.debug(f"QR code generated: version={actual_version}, modules={modules}x{modules}")
     
     # Calculate optimal box size to fit in qr_size
     box_size = qr_size // modules
     if box_size < 1:
         box_size = 1
+    logger.trace(f"Calculated box_size={box_size} for qr_size={qr_size}px with {modules} modules")
     
     # Resize QR to exact pixel dimensions
     final_qr_size = modules * box_size
     qr_img = qr_img.resize((final_qr_size, final_qr_size), Image.Resampling.NEAREST)
+    logger.debug(f"QR resized to {final_qr_size}x{final_qr_size}px")
     
     # Create stamp canvas
     if config.square_stamp:
         canvas_width = print_width
         canvas_height = print_width
+        logger.debug(f"Creating square stamp: {canvas_width}x{canvas_height}px")
     else:
         canvas_width = final_qr_size + (print_width - final_qr_size)  # Center padding
         canvas_height = print_width
+        logger.debug(f"Creating rectangular stamp: {canvas_width}x{canvas_height}px")
     
     # Create canvas (white background)
     canvas = Image.new("L", (canvas_width, canvas_height), 255)
@@ -212,13 +225,16 @@ def generate_qr_image(
     # Center QR on canvas
     x_offset = (canvas_width - final_qr_size) // 2
     y_offset = (canvas_height - final_qr_size) // 2
+    logger.trace(f"Centering QR at offset ({x_offset}, {y_offset})")
     canvas.paste(qr_img, (x_offset, y_offset))
     
     # Apply visual effects
     if config.invert:
+        logger.debug("Inverting QR colors")
         canvas = Image.eval(canvas, lambda x: 255 - x)
     
     if config.add_border_line:
+        logger.debug(f"Adding border line (width={config.border_line_width})")
         draw = ImageDraw.Draw(canvas)
         lw = config.border_line_width
         # Draw rectangle border
@@ -228,6 +244,7 @@ def generate_qr_image(
             width=lw,
         )
     
+    logger.info(f"QR image generated: {canvas_width}x{canvas_height}px")
     return canvas
 
 
@@ -371,17 +388,22 @@ def print_qr(
         config: QR configuration.
     """
     config = config or DEFAULT_CONFIG
+    logger.info(f"Printing QR code: data='{data[:50]}...' (len={len(data)}), "
+               f"tape={printer.media_width}mm, config={config}")
     
     # Generate QR image sized for current tape
     img = generate_qr_image(data, printer.media_width, config)
     
     # Print it
+    logger.debug(f"Calling printer.print_image with autocut={config.autocut}, "
+                f"margin={config.feed_margin}, chain={config.skip_initial_feed}")
     printer.print_image(
         img,
         autocut=config.autocut,
         margin=config.feed_margin,
         chain=config.skip_initial_feed,
     )
+    logger.info("QR code print job completed")
 
 
 def print_qr_batch(

@@ -19,6 +19,7 @@ dependencies = [
     "Pillow>=10.0.0",
     "packbits>=0.6",
     "qrcode>=7.4",
+    "loguru>=0.7.0",
 ]
 
 [build-system]

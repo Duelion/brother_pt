@@ -20,9 +20,9 @@ uv add brother-pt-bluetooth
 
 ## Requirements
 
-- Windows 10/11 (Bluetooth SPP support)
+- **Windows 10/11** or **Linux** (with Bluetooth SPP support)
 - Python 3.10+
-- Printer paired via Windows Bluetooth settings
+- Printer paired via Bluetooth settings
 
 ## Quick Start
 
@@ -30,11 +30,14 @@ uv add brother-pt-bluetooth
 from brother_pt import BrotherPTBluetooth
 from PIL import Image
 
-# Connect to printer (auto-detects COM port)
+# Connect to printer (auto-detects port)
 printer = BrotherPTBluetooth()
 
 # Or specify port explicitly
+# Windows:
 printer = BrotherPTBluetooth("COM4")
+# Linux:
+printer = BrotherPTBluetooth("/dev/rfcomm0")
 
 # Check tape info
 print(f"Tape: {printer.media_width}mm")
@@ -54,7 +57,12 @@ printer.close()
 from brother_pt import BrotherPTBluetooth
 from PIL import Image
 
+# Windows
 with BrotherPTBluetooth("COM4") as printer:
+    printer.print_image(Image.open("label.png"))
+
+# Linux
+with BrotherPTBluetooth("/dev/rfcomm0") as printer:
     printer.print_image(Image.open("label.png"))
 ```
 
@@ -92,7 +100,7 @@ with BrotherPTBluetooth() as printer:
 
 ```python
 BrotherPTBluetooth(
-    port: str = None,      # COM port, auto-detect if None
+    port: str = None,      # Serial port (Windows: "COM4", Linux: "/dev/rfcomm0"), auto-detect if None
     baudrate: int = 9600,  # Serial baud rate
     timeout: float = 3.0,  # Read/write timeout
 )
@@ -119,7 +127,9 @@ width = get_print_width(18)  # Returns 112
 margin = TAPE_MARGINS[18]  # Returns 8
 ```
 
-## Finding Your COM Port
+## Finding Your Serial Port
+
+### Windows
 
 After pairing the printer:
 
@@ -128,7 +138,29 @@ After pairing the printer:
 3. Find "Standard Serial over Bluetooth link"
 4. Use that COM port (usually COM3 or COM4)
 
-Or let the library auto-detect:
+### Linux
+
+After pairing the printer, you may need to bind it to an RFCOMM device:
+
+```bash
+# Find the printer's Bluetooth address
+bluetoothctl
+# > scan on
+# > devices
+# > pair <MAC-ADDRESS>
+# > trust <MAC-ADDRESS>
+# > connect <MAC-ADDRESS>
+# > quit
+
+# Bind to /dev/rfcomm0 (requires sudo)
+sudo rfcomm bind /dev/rfcomm0 <MAC-ADDRESS>
+
+# Or use the library's auto-detection
+```
+
+### Auto-Detection
+
+The library can auto-detect the Bluetooth port on both platforms:
 
 ```python
 printer = BrotherPTBluetooth()  # Auto-finds Bluetooth port
@@ -137,8 +169,12 @@ printer = BrotherPTBluetooth()  # Auto-finds Bluetooth port
 ## Troubleshooting
 
 ### "No Bluetooth serial port found"
-- Ensure printer is paired in Windows Bluetooth settings
-- Printer should show as "PT-P710BT" with status "Connected"
+- **Windows**: Ensure printer is paired in Windows Bluetooth settings. Printer should show as "PT-P710BT" with status "Connected"
+- **Linux**: 
+  - Ensure printer is paired: `bluetoothctl` -> `pair <MAC>` -> `trust <MAC>` -> `connect <MAC>`
+  - Bind to RFCOMM device: `sudo rfcomm bind /dev/rfcomm0 <MAC-ADDRESS>`
+  - Check if device exists: `ls -l /dev/rfcomm*`
+  - Ensure user has permissions: `sudo usermod -a -G dialout $USER` (may require logout/login)
 
 ### "Image dimensions don't match tape"
 - Image height must exactly match `printer.print_width`

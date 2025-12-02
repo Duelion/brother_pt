@@ -180,22 +180,34 @@ class PrinterStatus:
 
 def parse_status(data: bytes) -> Optional[PrinterStatus]:
     """Parse 32-byte status response. Returns None if invalid."""
+    from loguru import logger
+    
     if len(data) < STATUS_SIZE:
+        logger.warning(f"Status data too short: {len(data)} bytes (expected {STATUS_SIZE})")
         return None
     if data[0] != 0x80 or data[1] != 0x20:
+        logger.warning(f"Invalid status header: 0x{data[0]:02X} 0x{data[1]:02X} (expected 0x80 0x20)")
         return None
 
-    return PrinterStatus(
-        raw=data,
-        model=data[StatusOffset.MODEL],
-        media_width=data[StatusOffset.MEDIA_WIDTH],
-        media_type=MediaType(data[StatusOffset.MEDIA_TYPE]),
-        tape_color=data[StatusOffset.TAPE_COLOR],
-        text_color=data[StatusOffset.TEXT_COLOR],
-        status_type=StatusType(data[StatusOffset.STATUS_TYPE]),
-        error1=data[StatusOffset.ERROR1],
-        error2=data[StatusOffset.ERROR2],
-    )
+    try:
+        status = PrinterStatus(
+            raw=data,
+            model=data[StatusOffset.MODEL],
+            media_width=data[StatusOffset.MEDIA_WIDTH],
+            media_type=MediaType(data[StatusOffset.MEDIA_TYPE]),
+            tape_color=data[StatusOffset.TAPE_COLOR],
+            text_color=data[StatusOffset.TEXT_COLOR],
+            status_type=StatusType(data[StatusOffset.STATUS_TYPE]),
+            error1=data[StatusOffset.ERROR1],
+            error2=data[StatusOffset.ERROR2],
+        )
+        logger.trace(f"Parsed status: model=0x{status.model:02X}, media={status.media_width}mm, "
+                    f"type={status.media_type.name}, status={status.status_type.name}, "
+                    f"errors=0x{status.error1:02X}/0x{status.error2:02X}")
+        return status
+    except (ValueError, IndexError) as e:
+        logger.error(f"Failed to parse status: {e}, data: {data.hex()}")
+        return None
 
 
 # =============================================================================
